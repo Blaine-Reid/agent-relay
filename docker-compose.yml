@@ -1,0 +1,30 @@
+services:
+  gateway:
+    build: ./gateway
+    ports:
+      - "9091:9091"
+    environment:
+      - TAILSCALE_AUTH_KEY=${TAILSCALE_AUTH_KEY:?TAILSCALE_AUTH_KEY must be set in .env}
+      - TAILSCALE_HOSTNAME=${TAILSCALE_HOSTNAME:-agent-relay-even-g2}
+      - BACKEND=${BACKEND:-hermes}
+      - HERMES_BASE_URL=${HERMES_BASE_URL:?HERMES_BASE_URL must be set in .env}
+      - HERMES_API_KEY=${HERMES_API_KEY:?HERMES_API_KEY must be set in .env}
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-}
+      - LM_STUDIO_MODEL=${LM_STUDIO_MODEL:-}
+      - SOGNI_BASE_URL=${SOGNI_BASE_URL:?SOGNI_BASE_URL must be set in .env}
+      - SOGNI_STT_PATH=${SOGNI_STT_PATH:-/transcribe}
+      - SOGNI_API_KEY=${SOGNI_API_KEY:?SOGNI_API_KEY must be set in .env}
+      - SOGNI_ENGINE=${SOGNI_ENGINE:-qwen3}
+      - SOGNI_LANGUAGE=${SOGNI_LANGUAGE:-en}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - session-registry:/data
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
+  session-registry:
