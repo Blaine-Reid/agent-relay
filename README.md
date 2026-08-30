@@ -32,20 +32,21 @@ app talks to over one WebSocket connection.
 
 ## Requirements
 
-- **Docker** and **Docker Compose**
-- A **Tailscale** account (free tier works) — the gateway gets its own
-  tailnet identity so the glasses can reach it from anywhere
+- **[Docker](https://docs.docker.com/get-docker/)** and Docker Compose (bundled with Docker Desktop)
+- A **[Tailscale](https://tailscale.com/)** account (free tier works) — the
+  gateway gets its own tailnet identity so the glasses can reach it from
+  anywhere
 - An **AI backend** reachable on your tailnet — one of:
   - A Hermes-compatible agent server (built against
     [Nous Research's Hermes](https://github.com/NousResearch); needs
     `POST/GET/DELETE /api/sessions`, `POST /api/sessions/{id}/chat/stream`
     with the SSE event shape documented in `gateway/backends/hermes.py`)
-  - **Any OpenAI-compatible `/v1/chat/completions` server** — LM Studio,
-    **Ollama** (its OpenAI-compatible API is on its normal port, `11434`,
-    no separate flag needed), or similar. Simpler to point at than Hermes,
-    but none of these have a native multi-session concept, so the gateway
-    keeps sessions in memory instead (see
-    [Known limitations](#known-limitations))
+  - **Any OpenAI-compatible `/v1/chat/completions` server** —
+    [LM Studio](https://lmstudio.ai/) or **[Ollama](https://ollama.com/)**
+    (its OpenAI-compatible API is on its normal port, `11434`, no separate
+    flag needed), or similar. Simpler to point at than Hermes, but none of
+    these have a native multi-session concept, so the gateway keeps sessions
+    in memory instead (see [Known limitations](#known-limitations))
 - A **speech-to-text service** reachable on your tailnet. This was built
   against a self-hosted multipart-upload STT server; see
   `gateway/stt_client.py` for the exact request/response shape it expects.
@@ -58,17 +59,22 @@ app talks to over one WebSocket connection.
 
 ## Setup
 
-1. Clone this repo, then `cp .env.example .env`.
-2. Fill in `.env`:
+1. Clone this repo.
+2. Fill in `.env` — pick one:
+   - **Setup wizard (recommended):** `python3 setup_wizard.py` — no
+     dependencies, opens a local form in your browser, links straight to
+     where each value comes from, writes `.env` for you. Safe to re-run any
+     time to change a setting later.
+   - **Manual:** `cp .env.example .env` and fill it in yourself:
 
-   | Variable | What it is |
-   |---|---|
-   | `TAILSCALE_AUTH_KEY` | A **reusable** key from your [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). Must be reusable, not single-use — the container restarts during development. If your tailnet has device approval on, approve the new node once at `https://login.tailscale.com/admin/machines` after first start. |
-   | `TAILSCALE_HOSTNAME` | The name your gateway will use on your tailnet (default `agent-relay-even-g2`) — this becomes the address you'll enter in the glasses app's setup screen. |
-   | `BACKEND` | `hermes` or `lm_studio` |
-   | `HERMES_BASE_URL` / `HERMES_API_KEY` | Your Hermes instance's address and API key |
-   | `LM_STUDIO_BASE_URL` / `LM_STUDIO_MODEL` | Only needed if `BACKEND=lm_studio` — e.g. `http://<host>:1234` for LM Studio, `http://<host>:11434` for Ollama. `LM_STUDIO_MODEL` is optional if your server only has one model loaded. |
-   | `SOGNI_BASE_URL` / `SOGNI_API_KEY` / etc. | Your STT service's address and credentials |
+     | Variable | What it is |
+     |---|---|
+     | `TAILSCALE_AUTH_KEY` | A **reusable** key from your [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). Must be reusable, not single-use — the container restarts during development. If your tailnet has device approval on, approve the new node once at `https://login.tailscale.com/admin/machines` after first start. |
+     | `TAILSCALE_HOSTNAME` | The name your gateway will use on your tailnet (default `agent-relay-even-g2`) — this becomes the address you'll enter in the glasses app's setup screen. |
+     | `BACKEND` | `hermes` or `lm_studio` |
+     | `HERMES_BASE_URL` / `HERMES_API_KEY` | Your [Hermes](https://github.com/NousResearch) instance's address and API key |
+     | `LM_STUDIO_BASE_URL` / `LM_STUDIO_MODEL` | Only needed if `BACKEND=lm_studio` — e.g. `http://<host>:1234` for [LM Studio](https://lmstudio.ai/), `http://<host>:11434` for [Ollama](https://ollama.com/). `LM_STUDIO_MODEL` is optional if your server only has one model loaded. |
+     | `SOGNI_BASE_URL` / `SOGNI_API_KEY` / etc. | Your STT service's address and credentials |
 
 3. `docker compose up --build` — builds the gateway and brings up its own
    Tailscale node, serving on port 9091.
