@@ -45,6 +45,7 @@ app itself never calls them.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -147,6 +148,53 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     # Per-connection: the most recent transcript per session, held until the
     # user confirms it on the glasses (or a new transcribe supersedes it).
     pending_transcripts: dict[str, str] = {}
+    # Strong refs so asyncio doesn't GC an in-flight background task (STT and
+    # especially an agent turn with tool calls can run for minutes) — see
+    # spawn() below.
+    background_tasks: set[asyncio.Task] = set()
+    # transcribe/confirm_send now write to `ws` from background tasks instead
+    # of the main loop (see spawn()) — this serializes those writes against
+    # each other and against the main loop's own inline replies, since
+    # concurrent send_json calls on one WebSocketResponse aren't guaranteed
+    # safe against interleaving.
+    send_lock = asyncio.Lock()
+
+    async def send_json(payload: dict) -> None:
+        async with send_lock:
+            await ws.send_json(payload)
+
+    def spawn(coro) -> None:
+        # Runs a slow operation (STT, or the chat backend) without blocking
+        # this connection's `async for msg in ws` loop. Blocking that loop
+        # was the actual bug behind "agent replies over ~90s get
+        # interrupted": while it's stuck awaiting one message's handler,
+        # aiohttp can't process ANY other frame on the socket either,
+        # including the protocol-level ping/pong traffic other layers
+        # (mobile networking, intermediate proxies) use to decide the
+        # connection is still alive — confirmed by reproducing it with a
+        # minimal server blocked in a long-running handler.
+        task = asyncio.create_task(coro)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    async def do_transcribe(session_id: str, pcm: bytes, sample_rate: int) -> None:
+        try:
+            text = await stt.transcribe(pcm, sample_rate=sample_rate)
+            pending_transcripts[session_id] = text
+            await send_json({"type": "transcript", "session_id": session_id, "text": text})
+        except Exception as exc:  # noqa: BLE001 - surface every failure to the client
+            logger.exception("Error in transcribe background task")
+            await send_json({"type": "error", "message": str(exc)})
+
+    async def do_confirm_send(session_id: str, text: str) -> None:
+        try:
+            reply = ""
+            async for chunk in backend.send_message(session_id, text):
+                reply = chunk  # backends yield the full consolidated reply once
+            await send_json({"type": "chat_reply", "session_id": session_id, "text": reply})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Error in confirm_send background task")
+            await send_json({"type": "error", "message": str(exc)})
 
     logger.info("Glasses client connected")
     async for msg in ws:
@@ -167,12 +215,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
 
                 pcm = base64.b64decode(data["audio_b64"])
                 sample_rate = data.get("sample_rate", 16000)
-
-                text = await stt.transcribe(pcm, sample_rate=sample_rate)
-                pending_transcripts[session_id] = text
-                await ws.send_json(
-                    {"type": "transcript", "session_id": session_id, "text": text}
-                )
+                spawn(do_transcribe(session_id, pcm, sample_rate))
                 continue
 
             if msg_type == "confirm_send":
@@ -182,51 +225,45 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                 text = pending_transcripts.pop(session_id, None)
                 if text is None:
                     raise ValueError("confirm_send with no pending transcript for this session")
-
-                reply = ""
-                async for chunk in backend.send_message(session_id, text):
-                    reply = chunk  # backends yield the full consolidated reply once
-                await ws.send_json(
-                    {"type": "chat_reply", "session_id": session_id, "text": reply}
-                )
+                spawn(do_confirm_send(session_id, text))
                 continue
 
             if msg_type == "list_sessions":
                 sessions = await backend.list_sessions()
-                await ws.send_json(
+                await send_json(
                     {"type": "sessions", "sessions": [{"id": s.id, "name": s.name} for s in sessions]}
                 )
                 continue
 
             if msg_type == "create_session":
                 session = await backend.create_session(name=data.get("name"))
-                await ws.send_json(
+                await send_json(
                     {"type": "session_created", "session": {"id": session.id, "name": session.name}}
                 )
                 continue
 
             if msg_type == "delete_session":
                 await backend.delete_session(data["session_id"])
-                await ws.send_json({"type": "session_deleted", "session_id": data["session_id"]})
+                await send_json({"type": "session_deleted", "session_id": data["session_id"]})
                 continue
 
             if msg_type == "list_all_sessions":
                 sessions = await backend.list_all_sessions()
-                await ws.send_json(
+                await send_json(
                     {"type": "all_sessions", "sessions": [{"id": s.id, "name": s.name} for s in sessions]}
                 )
                 continue
 
             if msg_type == "attach_session":
                 await backend.attach_session(data["session_id"])
-                await ws.send_json({"type": "session_attached", "session_id": data["session_id"]})
+                await send_json({"type": "session_attached", "session_id": data["session_id"]})
                 continue
 
             if msg_type == "get_recent_exchange":
                 session_id = data["session_id"]
                 exchange = await backend.get_recent_exchange(session_id)
                 transcript, reply = exchange if exchange else ("", "")
-                await ws.send_json(
+                await send_json(
                     {
                         "type": "recent_exchange",
                         "session_id": session_id,
@@ -239,9 +276,11 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
             logger.warning("Unknown message type: %s", msg_type)
         except Exception as exc:  # noqa: BLE001 - surface every failure to the client
             logger.exception("Error handling WS message")
-            await ws.send_json({"type": "error", "message": str(exc)})
+            await send_json({"type": "error", "message": str(exc)})
 
     logger.info("Glasses client disconnected")
+    for task in background_tasks:
+        task.cancel()
     return ws
 
 

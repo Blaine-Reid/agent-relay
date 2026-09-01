@@ -117,6 +117,16 @@ A few decisions that aren't obvious from the code alone:
   connections, and regular traffic both keeps the path alive and lets this
   server detect a truly dead peer faster than waiting on a read that never
   comes.
+- **`transcribe` and `confirm_send` run as background tasks, not inline in
+  the connection's message loop.** They used to `await` directly inside
+  `async for msg in ws:` — while blocked on a slow agent reply, the server
+  wasn't reading (or answering pings on) that socket at all, so any layer
+  watching for a responsive connection would give up and kill it before a
+  long reply ever arrived. Reproduced directly (a minimal handler blocked in
+  `asyncio.sleep(130)` got its connection torn down as dead well before
+  130s; moving the same work into `asyncio.create_task()` let it survive
+  cleanly) — this is why an agent turn with a slow tool call used to look
+  like a hang/timeout around the same rough mark every time.
 - **A local session registry** (`gateway/session_registry.py`). A real
   agent backend's session list can include cron jobs, other chat clients,
   everything — this gateway filters to sessions it actually created or was
