@@ -82,6 +82,18 @@ app talks to over one WebSocket connection.
    the hostname (e.g. `agent-relay-even-g2.yourtailnet.ts.net`). Enter this
    in the glasses app's setup screen (see the app's own repo/README).
 
+## Troubleshooting
+
+If the glasses app reports "Disconnected," check in this order:
+
+1. **The phone's own Tailscale app** — turned off is by far the most common
+   cause, and it looks identical to a broken gateway from the glasses side.
+2. `docker compose ps` here — is the `gateway` container actually running?
+3. `docker compose exec gateway tailscale status` — does it show as online,
+   and does the hostname match what's entered in the glasses app?
+4. `docker compose logs gateway` — Tailscale auth/DERP connection errors
+   show up here (e.g. an expired non-reusable auth key).
+
 ## Design notes
 
 A few decisions that aren't obvious from the code alone:
